@@ -4,7 +4,7 @@ Tres stacks independientes conectados por una red Docker compartida (`tenant-net
 Pensado para probarse primero en un servidor local virtualizado, sin IP pública ni Traefik.
 
 ```
-infra/
+netwise-crm/
 ├── network-setup.sh
 ├── odoo/          → CRM, multi-tenant por base de datos (db_filter)
 ├── chatwoot/       → chat, multi-tenant nativo (accounts)
@@ -19,7 +19,7 @@ infra/
 ## 1. Crear la red compartida (una sola vez)
 
 ```bash
-cd infra
+cd netwise-crm
 ./network-setup.sh
 ```
 
