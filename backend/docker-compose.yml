@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  backend:
+    build: .
+    container_name: backend
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "4000:4000"
+    depends_on:
+      - backend-db
+      - backend-redis
+    networks:
+      - tenant-net
+
+  backend-db:
+    image: postgres:15
+    container_name: backend-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: backend
+      POSTGRES_PASSWORD: backend
+      POSTGRES_DB: backend
+    volumes:
+      - backend-db-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - tenant-net
+
+  backend-redis:
+    image: redis:7-alpine
+    container_name: backend-redis
+    restart: unless-stopped
+    networks:
+      - tenant-net
+
+networks:
+  tenant-net:
+    external: true
+
+volumes:
+  backend-db-data:

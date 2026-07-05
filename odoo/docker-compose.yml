@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  odoo-db:
+    image: postgres:15
+    container_name: odoo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+      POSTGRES_DB: postgres
+    volumes:
+      - odoo-db-data:/var/lib/postgresql/data
+    networks:
+      - tenant-net
+
+  odoo:
+    image: odoo:17
+    container_name: odoo
+    restart: unless-stopped
+    depends_on:
+      - odoo-db
+    ports:
+      - "8069:8069"   # web / XML-RPC
+      - "8072:8072"   # longpolling (chat interno, notificaciones)
+    volumes:
+      - odoo-web-data:/var/lib/odoo
+      - ./config:/etc/odoo
+      - ./addons:/mnt/extra-addons
+    networks:
+      - tenant-net
+
+networks:
+  tenant-net:
+    external: true
+
+volumes:
+  odoo-db-data:
+  odoo-web-data:
