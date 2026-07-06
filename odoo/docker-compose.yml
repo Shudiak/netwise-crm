@@ -1,7 +1,7 @@
 
 services:
   odoo-db:
-    image: postgres:15
+    image: postgres:16
     container_name: odoo-db
     restart: unless-stopped
     environment:
@@ -14,7 +14,7 @@ services:
       - tenant-net
 
   odoo:
-    image: odoo:17
+    image: odoo:19
     container_name: odoo
     restart: unless-stopped
     depends_on:

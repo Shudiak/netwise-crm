@@ -1,0 +1,14 @@
+# Odoo runtime data
+odoo-web-data/
+odoo-db-data/
+
+# Python
+__pycache__/
+*.pyc
+
+# Docker volumes
+*.tar
+
+# OS
+.DS_Store
+Thumbs.db
