@@ -1,155 +1,167 @@
-# Stack Chatwoot + Odoo + Backend orquestador
+# Netwise CRM Stack
 
 Tres stacks independientes conectados por una red Docker compartida (`tenant-net`).
-Pensado para probarse primero en un servidor local virtualizado, sin IP pública ni Traefik.
+Diseñado para desplegarse en servidores localmente virtualizados (VMware, Proxmox) o VPS.
 
 ```
 netwise-crm/
-├── network-setup.sh
-├── odoo/          → CRM, multi-tenant por base de datos (db_filter)
-├── chatwoot/       → chat, multi-tenant nativo (accounts)
-└── backend/        → tu fachada + orquestador (Express + TypeScript)
+├── network-setup.sh    → Crea la red Docker compartida (una sola vez)
+├── odoo/               → CRM Odoo 19 Community + Dark Mode
+├── chatwoot/            → Chat multicanal, multi-tenant nativo
+└── backend/             → API orquestador (Express + TypeScript)
 ```
 
-## 0. Requisitos en el servidor
+## Stack actual — Odoo 19
+
+| Componente | Versión | Notas |
+|---|---|---|
+| Odoo | 19.0 Community | Última versión estable |
+| PostgreSQL | 16 | Requerido por Odoo 19 |
+| Dark Mode | dark_mode_backend v19.0 | Cybrosys — se aplica automáticamente |
+| Multi-tenant | `db_filter = ^%d$` | Filtra BD por subdominio/Host header |
+| Workers | 2 | Ajustar según CPU/RAM |
+| Longpolling | 8072 | Chat interno y notificaciones |
+
+## Puertos
+
+| Puerto | Servicio |
+|---|---|
+| 8069 | Odoo Web / XML-RPC |
+| 8072 | Odoo Longpolling |
+| 3000 | Chatwoot |
+| 4000 | Backend API |
+
+## Requisitos
 
 - Docker + Docker Compose v2
-- Puertos libres: 8069, 8072 (Odoo), 3000 (Chatwoot), 4000 (backend)
+- Mínimo **20GB disco** (imágenes Odoo 19 + Postgres 16 = ~4GB, BD crece con uso)
+- Puertos libres: 8069, 8072, 3000, 4000
 
-## 1. Crear la red compartida (una sola vez)
+## 1. Despliegue rápido (Odoo)
 
 ```bash
+git clone git@github.com:Shudiak/netwise-crm.git
 cd netwise-crm
-./network-setup.sh
-```
-
-Los tres `docker-compose.yml` referencian `tenant-net` como red **externa** — si no la creas antes, el `docker compose up` de cada stack falla.
-
-## 2. Levantar Odoo
-
-```bash
+./network-setup.sh          # Crea la red tenant-net (solo la primera vez)
 cd odoo
 docker compose up -d
 ```
 
-Revisa que la contraseña maestra en `config/odoo.conf` (`admin_passwd`) sea la misma que pondrás luego en `backend/.env` como `ODOO_MASTER_PASSWORD`. Cámbiala antes de exponer esto a nada que no sea tu red local.
+Después de levantar, entra a `http://<ip>:8069` y:
+1. Crea la base de datos (nombre, email admin, contraseña master)
+2. El dark mode se aplica automáticamente (ya está instalado como módulo)
+3. Si necesitas reinstalar: `docker compose stop odoo && docker compose run --rm odoo odoo -c /etc/odoo/odoo.conf -d <nombre_bd> -i dark_mode_backend --stop-after-init`
 
-### Verificar `db_filter` sin depender de DNS todavía
-
-```bash
-curl -H "Host: clientea.local" http://<ip-de-tu-vm>:8069/web/login
-```
-
-Si te devuelve el login (aunque la base `clientea` todavía no exista, Odoo debe mostrar el flujo correcto de "crear base" filtrado a ese nombre) sabes que el filtro está funcionando antes de meter ningún proxy.
-
-## 3. Levantar Chatwoot
+## 2. Levantar Chatwoot
 
 ```bash
 cd ../chatwoot
 cp .env.example .env
-# genera un secreto real y reemplázalo en .env
-openssl rand -hex 64
-```
+openssl rand -hex 64      # Genera secreto para .env
 
-Primer arranque — hay que preparar la base de datos y migrar:
-
-```bash
 docker compose up -d chatwoot-db chatwoot-redis
 docker compose run --rm chatwoot-rails bundle exec rails db:chatwoot_prepare
 docker compose up -d
 ```
 
-Entra a `http://<ip-de-tu-vm>:3000`, crea el primer usuario (super admin) desde el asistente de instalación.
+Entrar a `http://<ip>:3000`, crear super admin desde el asistente.
 
-### Generar el token de la Platform API (lo necesita tu backend)
-
-Desde la consola de Rails dentro del contenedor:
+### Token Platform API (para el backend)
 
 ```bash
 docker compose exec chatwoot-rails bundle exec rails console
 ```
-
 ```ruby
-user = User.find_by(email: 'tu_admin@correo.com')
+user = User.find_by(email: 'admin@correo.com')
 token = PlatformApiKey.create!(user: user)
 puts token.access_token
 ```
 
-Copia ese valor en `backend/.env` como `CHATWOOT_PLATFORM_TOKEN`.
-
-## 4. Levantar el backend
+## 3. Levantar el Backend
 
 ```bash
 cd ../backend
 cp .env.example .env
-# completa ODOO_MASTER_PASSWORD y CHATWOOT_PLATFORM_TOKEN con los valores de los pasos anteriores
+# Completa ODOO_MASTER_PASSWORD y CHATWOOT_PLATFORM_TOKEN
 docker compose up -d --build
 ```
 
-Prueba que responde:
-
 ```bash
-curl http://<ip-de-tu-vm>:4000/health
-# -> {"ok":true}
+curl http://<ip>:4000/health   # -> {"ok":true}
 ```
 
-## 5. Dar de alta tu primer cliente de prueba (tenant)
+## 4. Alta de tenant (cliente)
 
 ```bash
-curl -X POST http://<ip-de-tu-vm>:4000/api/admin/tenants \
+curl -X POST http://<ip>:4000/api/admin/tenants \
   -H "Content-Type: application/json" \
   -d '{"name":"Cliente A","subdomain":"clientea","adminEmail":"admin@clientea.local"}'
 ```
 
-Esto internamente:
-1. Crea la base de datos `clientea` en Odoo vía `create_database` (XML-RPC).
-2. Crea un `account` nuevo en la misma instalación de Chatwoot.
-3. Guarda el mapeo en la tabla `tenants` de tu propia base (`backend-db`).
+Esto crea: BD en Odoo (XML-RPC) + account en Chatwoot + mapeo en backend-db.
 
-## 6. Simular el subdominio desde tu máquina cliente
+## 5. Pruebas locales sin DNS
 
-Como no tienes DNS real, edita el `hosts` de la máquina desde la que vas a probar (no del servidor):
+Edita `hosts` en tu máquina cliente (no en el servidor):
 
 ```
-# /etc/hosts (Linux/Mac) o C:\Windows\System32\drivers\etc\hosts (Windows)
-<ip-de-tu-vm>   clientea.local
+<ip-de-la-vm>   clientea.local
 ```
 
-Ahora `http://clientea.local:4000/api/conversations` resuelve el tenant correcto a través del middleware `tenantResolver`.
+```
+http://clientea.local:4000/api/conversations
+```
 
-> Nota: en este stack de prueba el backend detecta el tenant por subdominio directamente,
-> sin proxy intermedio. Cuando pases a producción con Traefik, el header `Host` seguirá
-> llegando igual — solo agregas TLS y el enrutamiento a Odoo delante de todo esto.
-
-## 7. Probar el flujo de webhooks localmente
-
-Como tu servidor no tiene IP pública, Meta no podrá llamarte directamente. Para probar el flujo de principio a fin sin exponer nada a internet, simula el webhook a mano:
+## 6. Simular webhooks (sin IP pública)
 
 ```bash
-curl -X POST http://<ip-de-tu-vm>:4000/webhooks/chatwoot \
+curl -X POST http://<ip>:4000/webhooks/chatwoot \
   -H "Content-Type: application/json" \
   -H "Host: clientea.local" \
   -d '{
     "event": "contact_created",
-    "contact": { "id": 1, "name": "Juan Pérez", "phone_number": "+521234567890" }
+    "contact": { "id": 1, "name": "Juan Pérez", "phone_number": "+521****7890" }
   }'
 ```
 
-Revisa los logs del backend (`docker compose logs -f backend`) para ver el job encolándose y procesándose contra Odoo.
-
-Para probar el webhook de Meta sin cuenta de Ads real, puedes simular el payload de `leadgen` a mano de la misma forma — solo cambia la URL a `/webhooks/meta` y ajusta el cuerpo al formato de `entry[].changes[]` que envía Meta.
-
-## 8. Orden de apagado/prendido recomendado
+## 7. Orden de arranque/apagado
 
 ```
-odoo → chatwoot → backend      (al levantar)
-backend → chatwoot → odoo      (al apagar)
+Levantar:  odoo → chatwoot → backend
+Apagar:    backend → chatwoot → odoo
 ```
 
-El backend depende de que las otras dos APIs respondan; si las levantas después, simplemente reinicia el contenedor `backend` (`docker compose restart backend`).
+## Expansión de disco (VMware)
 
-## Próximos pasos sugeridos
+Si el disco del server se quedó sin espacio tras expandirlo en VMware:
 
-- Cuando quieras exponer esto a internet real: agrega Traefik como cuarto stack, con `HostRegexp` apuntando a Odoo y un router aparte para Chatwoot y el backend, más `mkcert` o Let's Encrypt según el caso.
-- Agrega autenticación real (JWT) al `portalRouter` — en este esqueleto los endpoints del portal están abiertos para facilitar las pruebas.
-- El `event_log` ya está en el esquema de `init-db.sql` pero el backend aún no escribe en él — es el siguiente paso natural para tener trazabilidad y reintentos manuales de eventos fallidos.
+```bash
+# El PV detecta el espacio nuevo automáticamente
+lvextend -l +100%FREE /dev/ubuntu-vg/ubuntu-lv
+resize2fs /dev/ubuntu-vg/ubuntu-lv
+df -h /
+```
+
+## Configuración de Odoo
+
+Archivo: `odoo/config/odoo.conf`
+
+| Parámetro | Valor | Descripción |
+|---|---|---|
+| `admin_passwd` | `odoo` | ⚠️ Cambiar antes de producción |
+| `db_host` | `odoo-db` | Container Postgres |
+| `db_filter` | `^%d$` | Multi-tenant por subdominio |
+| `proxy_mode` | `True` | Detrás de reverse proxy |
+| `workers` | `2` | Ajustar por CPU |
+| `longpolling_port` | `8072` | Notificaciones/chat |
+
+## Addons custom
+
+- **dark_mode_backend** (Cybrosys) — Tema oscuro automático para Odoo 19 Community
+
+## Próximos pasos
+
+- [ ] Traefik como reverse proxy con TLS (Let's Encrypt / mkcert)
+- [ ] Autenticación JWT en `portalRouter`
+- [ ] Event log en `backend-db` para trazabilidad de webhooks
+- [ ] Backups automatizados de PostgreSQL
